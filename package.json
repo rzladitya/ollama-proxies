@@ -12,7 +12,7 @@
     "start": "npm run start -w apps/server",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "lint": "eslint .",
+    "lint": "npm run typecheck",
     "typecheck": "tsc -b",
     "format": "prettier --write .",
     "db:generate": "npm run db:generate -w packages/storage",

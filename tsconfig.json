@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/routing-core" },
+    { "path": "./packages/ollama-client" },
+    { "path": "./packages/storage" },
+    { "path": "./packages/ui" },
+    { "path": "./apps/server" },
+    { "path": "./apps/web" }
+  ]
+}

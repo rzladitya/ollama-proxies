@@ -1,0 +1,18 @@
+{
+  "generated": "2026-09-01T10:45:00.000Z",
+  "sections": [
+    {
+      "id": "mockups",
+      "label": "Mockups",
+      "groups": [
+        {
+          "slug": "ollama-proxy-dashboard",
+          "files": [
+            { "label": "Ollama Proxy Dashboard", "path": "mockups/ollama-proxy-dashboard/index.html" },
+            { "label": "Gateway Logs", "path": "mockups/ollama-proxy-dashboard/logs.html" }
+          ]
+        }
+      ]
+    }
+  ]
+}

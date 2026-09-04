@@ -10,7 +10,8 @@
     "isolatedModules": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
-    "noEmit": true
+    "noEmit": true,
+    "tsBuildInfoFile": "node_modules/.tsbuildinfo"
   },
   "include": ["src"]
 }

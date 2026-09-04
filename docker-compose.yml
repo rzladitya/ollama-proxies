@@ -11,6 +11,11 @@ services:
       - ./data:/app/data
     env_file:
       - .env
+    environment:
+      # Must bind to all interfaces inside the container, otherwise the published
+      # port reaches nothing. Overrides whatever .env sets (env_file loses to
+      # environment), so a stock .env.example still yields a reachable container.
+      OLLAMA_PROXY_HOST: 0.0.0.0
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:11435/health/live').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
       interval: 30s

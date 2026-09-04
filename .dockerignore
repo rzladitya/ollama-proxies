@@ -1,0 +1,40 @@
+# Keep the build context clean so the image is built from source in the
+# builder stage, never from whatever happens to be lying around on the host.
+
+# Host-built output — the runner stage takes these from --from=builder instead
+dist/
+**/dist/
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Host dependencies (may contain native binaries for the wrong platform)
+node_modules/
+**/node_modules/
+
+# Secrets & local state
+.env
+.env.local
+.env.*.local
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
+data/*.bak.*
+
+# VCS, tooling, docs — not needed to build or run
+.git/
+.gitignore
+.claude/
+.mcp.json
+docs/
+opendesign/
+tests/
+test-results/
+playwright-report/
+.playwright-mcp/
+*.md
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

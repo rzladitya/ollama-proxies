@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Server,
@@ -12,6 +12,15 @@ import {
   Menu,
   X,
   LogOut,
+  Images,
+  ChevronDown,
+  Brackets,
+  Brush,
+  AudioLines,
+  Mic,
+  Clapperboard,
+  Globe,
+  Lock,
 } from "lucide-react";
 import { useSystemHealth } from "../../api/hooks.js";
 import { getStoredAdminSecret, setStoredAdminSecret } from "../../api/client.js";
@@ -28,11 +37,28 @@ const NAV_ITEMS = [
   { to: "/status", label: "System Status", icon: ShieldAlert },
 ];
 
+// Media Providers submenu. Only Embedding is wired up; the rest are shown so the
+// shape of the section is visible, but they are inert until implemented.
+const MEDIA_PROVIDER_ITEMS = [
+  { to: "/media/embedding", label: "Embedding", icon: Brackets, enabled: true },
+  { to: "/media/text-to-image", label: "Text to Image", icon: Brush, enabled: false },
+  { to: "/media/text-to-speech", label: "Text To Speech", icon: AudioLines, enabled: false },
+  { to: "/media/speech-to-text", label: "Speech To Text", icon: Mic, enabled: false },
+  { to: "/media/video", label: "Video", icon: Clapperboard, enabled: false },
+  { to: "/media/web-fetch", label: "Web Fetch & Search", icon: Globe, enabled: false },
+];
+
 export function AppShell({ onLogout }: { onLogout?: () => void }) {
   const { data: health } = useSystemHealth();
+  const location = useLocation();
   const [isSecretModalOpen, setIsSecretModalOpen] = useState(false);
   const [secretInput, setSecretInput] = useState(getStoredAdminSecret());
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+
+  const isMediaSectionActive = location.pathname.startsWith("/media");
+  // Keep the section open when the user is inside it, so a page refresh does not
+  // hide the page they are looking at.
+  const [isMediaOpen, setIsMediaOpen] = useState(isMediaSectionActive);
 
   const handleSaveSecret = () => {
     setStoredAdminSecret(secretInput);
@@ -92,7 +118,7 @@ export function AppShell({ onLogout }: { onLogout?: () => void }) {
               </div>
               <span className="font-semibold text-sm tracking-tight">Ollama Proxy</span>
               <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-neutral-800 text-[var(--color-text-muted)] border border-neutral-700">
-                v1.0
+                v{__APP_VERSION__}
               </span>
             </div>
             {/* Close button inside drawer for mobile */}
@@ -128,6 +154,71 @@ export function AppShell({ onLogout }: { onLogout?: () => void }) {
                 </NavLink>
               );
             })}
+
+            {/* ── SYSTEM ── */}
+            <div className="pt-4 pb-1 px-3">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                System
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsMediaOpen((v) => !v)}
+              aria-expanded={isMediaOpen}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                isMediaSectionActive
+                  ? "text-[var(--color-text-primary)]"
+                  : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/5"
+              }`}
+            >
+              <Images className="w-4 h-4" />
+              <span className="flex-1 text-left">Media Providers</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform ${isMediaOpen ? "" : "-rotate-90"}`}
+              />
+            </button>
+
+            {isMediaOpen && (
+              <div className="pl-3 space-y-0.5">
+                {MEDIA_PROVIDER_ITEMS.map((item) => {
+                  const Icon = item.icon;
+
+                  if (!item.enabled) {
+                    return (
+                      <div
+                        key={item.to}
+                        title="Not available yet"
+                        aria-disabled="true"
+                        className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium text-[var(--color-text-muted)] opacity-50 cursor-not-allowed"
+                      >
+                        <Icon className="w-4 h-4" />
+                        <span className="flex-1">{item.label}</span>
+                        <Lock className="w-3 h-3" />
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      onClick={() => setIsMobileNavOpen(false)}
+                      className={({ isActive }) =>
+                        `flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                          isActive
+                            ? "bg-[var(--color-accent-bg)] text-[var(--color-accent)] font-semibold"
+                            : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/5"
+                        }`
+                      }
+                    >
+                      <Icon className="w-4 h-4" />
+                      {item.label}
+                    </NavLink>
+                  );
+                })}
+              </div>
+            )}
           </nav>
         </div>
 

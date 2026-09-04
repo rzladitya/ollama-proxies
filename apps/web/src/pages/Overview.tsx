@@ -38,8 +38,9 @@ export function OverviewPage() {
   const totalReq = analytics?.totalRequests ?? 0;
   const inTok = analytics?.inputTokens ?? 0;
   const outTok = analytics?.outputTokens ?? 0;
-  const cachedTok = analytics?.cachedTokens ?? 0;
-  const estCost = analytics?.estimatedCost ?? "~$0.00";
+  const totalTok = analytics?.totalTokens ?? 0;
+  const estCost = analytics?.estimatedCost ?? "$0.00";
+  const costRatesConfigured = analytics?.costRatesConfigured ?? false;
 
   const recentList = analytics?.recentRequests ?? [];
   const modelUsageList = analytics?.modelUsageList ?? [];
@@ -154,13 +155,13 @@ export function OverviewPage() {
           </div>
         </div>
 
-        {/* Card 3: Cached Tokens */}
+        {/* Card 3: Total Tokens */}
         <div className="bg-[#11131a] border border-[#242838] rounded-2xl p-5 shadow-lg space-y-1">
           <div className="text-xs uppercase font-mono tracking-wider text-neutral-400 font-semibold">
-            CACHED TOKENS
+            TOTAL TOKENS
           </div>
           <div className="text-3xl font-bold font-mono text-[#38bdf8] pt-1">
-            {cachedTok.toLocaleString()}
+            {totalTok.toLocaleString()}
           </div>
         </div>
 
@@ -183,7 +184,9 @@ export function OverviewPage() {
             {estCost}
           </div>
           <div className="text-[10px] text-neutral-500 font-mono">
-            Estimated, not actual billing
+            {costRatesConfigured
+              ? "Estimated from your configured rates"
+              : "Set token rates in Settings to estimate"}
           </div>
         </div>
       </div>
@@ -458,9 +461,6 @@ export function OverviewPage() {
                   {breakdownMode === "costs" ? "INPUT COST ↑" : "INPUT TOKENS ↑"}
                 </th>
                 <th className="pb-3 font-semibold text-right">
-                  {breakdownMode === "costs" ? "CACHED COST ↑" : "CACHED TOKENS ↑"}
-                </th>
-                <th className="pb-3 font-semibold text-right">
                   {breakdownMode === "costs" ? "OUTPUT COST ↑" : "OUTPUT TOKENS ↑"}
                 </th>
                 <th className="pb-3 font-semibold text-right text-[#eab308]">
@@ -490,11 +490,6 @@ export function OverviewPage() {
                       </td>
                       <td className="py-3.5 text-right text-neutral-300">
                         {breakdownMode === "costs" ? `$${m.inputCost.toFixed(2)}` : m.inputTokens.toLocaleString()}
-                      </td>
-                      <td className="py-3.5 text-right text-neutral-400">
-                        {breakdownMode === "costs"
-                          ? m.cachedCost > 0 ? `$${m.cachedCost.toFixed(2)}` : "—"
-                          : m.cachedTokens.toLocaleString()}
                       </td>
                       <td className="py-3.5 text-right text-neutral-300">
                         {breakdownMode === "costs" ? `$${m.outputCost.toFixed(2)}` : m.outputTokens.toLocaleString()}

@@ -25,10 +25,19 @@ ENV OLLAMA_PROXY_HOST=0.0.0.0
 ENV OLLAMA_PROXY_PORT=11435
 ENV OLLAMA_PROXY_DATA_DIR=/app/data
 
-# Copy built artifacts & dependencies
+# Copy sources (package manifests drive the workspace install)
 COPY package*.json ./
 COPY packages/ ./packages/
 COPY apps/ ./apps/
+
+# Copy compiled output from the build stage — never from the host
+COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
+COPY --from=builder /app/packages/ollama-client/dist ./packages/ollama-client/dist
+COPY --from=builder /app/packages/routing-core/dist ./packages/routing-core/dist
+COPY --from=builder /app/packages/storage/dist ./packages/storage/dist
+COPY --from=builder /app/packages/ui/dist ./packages/ui/dist
+COPY --from=builder /app/apps/server/dist ./apps/server/dist
+COPY --from=builder /app/apps/web/dist ./apps/web/dist
 
 # Clean dev dependencies for lean runtime image
 RUN npm ci --omit=dev

@@ -114,6 +114,42 @@ export const requestLogs = sqliteTable("request_logs", {
   errorCode: text("error_code"),
 });
 
+// ── embedding_connections ──
+// One upstream credential for a media provider. `providerId` is the provider
+// slug ("openrouter"); more providers plug in without a schema change.
+export const embeddingConnections = sqliteTable("embedding_connections", {
+  id: text("id").primaryKey(),
+  providerId: text("provider_id").notNull(),
+  name: text("name").notNull(),
+  encryptedApiKey: text("encrypted_api_key").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  state: text("state", { enum: ["ACTIVE", "INVALID", "DISABLED"] })
+    .notNull()
+    .default("ACTIVE"),
+  /** Display + round-robin ordering, 1-based. */
+  position: integer("position").notNull().default(1),
+  lastSuccessAt: text("last_success_at"),
+  lastErrorAt: text("last_error_at"),
+  lastErrorCode: text("last_error_code"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+// ── embedding_models ──
+// Curated catalog. OpenRouter's /models endpoint does not list embedding models,
+// so the catalog is seeded on bootstrap and editable from the dashboard.
+export const embeddingModels = sqliteTable("embedding_models", {
+  id: text("id").primaryKey(),
+  providerId: text("provider_id").notNull(),
+  /** What clients send, e.g. "openrouter/openai/text-embedding-3-large". */
+  publicModelId: text("public_model_id").notNull().unique(),
+  /** What we send upstream, e.g. "openai/text-embedding-3-large". */
+  upstreamModelId: text("upstream_model_id").notNull(),
+  label: text("label").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull(),
+});
+
 // ── settings ──
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),

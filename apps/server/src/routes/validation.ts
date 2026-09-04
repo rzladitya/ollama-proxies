@@ -20,6 +20,9 @@ export const chatCompletionRequestSchema = z.object({
   top_p: z.number().min(0).max(1).optional(),
   max_tokens: z.number().int().positive().optional(),
   stream: z.boolean().optional().default(false),
+  stream_options: z
+    .object({ include_usage: z.boolean().optional() })
+    .optional(),
   tools: z.array(z.unknown()).optional(),
   user: z.string().optional(),
 }).passthrough(); // allow vendor extensions

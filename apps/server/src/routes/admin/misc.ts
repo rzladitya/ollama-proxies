@@ -1,6 +1,78 @@
 import type { FastifyInstance } from "fastify";
 import { eq, and, desc, gte, lte } from "drizzle-orm";
 import { models, accountModels, upstreamAccounts, requestLogs, settings } from "@ollama-proxy/storage";
+import { getAccountMaxConcurrency } from "@ollama-proxy/routing-core";
+import { hashPassword } from "@ollama-proxy/shared";
+import {
+  checkBruteForce,
+  recordFailedAttempt,
+  clearFailedAttempts,
+  lockoutError,
+  verifyAdminSecret,
+  hasStoredAdminSecret,
+  invalidateAdminSecretCache,
+  ADMIN_SECRET_SETTING_KEY,
+} from "../../middleware/admin-auth.js";
+
+/**
+ * Operator-configured usage accounting.
+ *
+ * Ollama Cloud exposes no quota or billing API, so none of these can be read
+ * from upstream. They are the operator's own numbers, stored under the
+ * `usage_config` settings key and editable from the Settings page. Costs
+ * default to 0 so the dashboard reports $0.00 rather than an invented figure.
+ */
+export interface UsageConfig {
+  sessionWindowHours: number;
+  sessionLimitRequests: number;
+  weeklyWindowDays: number;
+  weeklyLimitRequests: number;
+  inputCostPerMTok: number;
+  outputCostPerMTok: number;
+}
+
+export const DEFAULT_USAGE_CONFIG: UsageConfig = {
+  sessionWindowHours: 5,
+  sessionLimitRequests: 1000,
+  weeklyWindowDays: 7,
+  weeklyLimitRequests: 5000,
+  inputCostPerMTok: 0,
+  outputCostPerMTok: 0,
+};
+
+async function loadUsageConfig(app: FastifyInstance): Promise<UsageConfig> {
+  const [row] = await app.db
+    .select()
+    .from(settings)
+    .where(eq(settings.key, "usage_config"))
+    .limit(1);
+
+  if (row) {
+    try {
+      return { ...DEFAULT_USAGE_CONFIG, ...(JSON.parse(row.value) as Partial<UsageConfig>) };
+    } catch {
+      /* malformed — fall through to defaults */
+    }
+  }
+  return DEFAULT_USAGE_CONFIG;
+}
+
+/**
+ * These are rolling windows, so the "reset" is when the oldest request still
+ * inside the window ages out — not a fixed clock time.
+ */
+function formatResetIn(resetAt: number | null): string {
+  if (resetAt == null) return "no usage in window";
+  const ms = resetAt - Date.now();
+  if (ms <= 0) return "now";
+  const totalMinutes = Math.floor(ms / 60_000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `in ${days}d ${hours}h`;
+  if (hours > 0) return `in ${hours}h ${minutes}m`;
+  return `in ${minutes}m`;
+}
 
 /**
  * Tasks 051-054: Models, Requests, Routing config, Settings
@@ -9,18 +81,105 @@ export async function miscAdminRoutes(app: FastifyInstance): Promise<void> {
   // ── Auth verify endpoint ──
   app.post("/api/admin/auth/login", async (request, reply) => {
     const body = (request.body as { secret?: string } | undefined) ?? {};
-    const adminSecret = app.config.adminSecret;
+    const ip = request.ip;
 
-    // If no adminSecret is configured in server .env, fallback to default admin secret "ollama"
-    const requiredSecret = adminSecret || "ollama";
-
-    if (body.secret && body.secret.trim() === requiredSecret) {
-      return reply.send({ success: true, secretConfigured: Boolean(adminSecret) });
+    // A correct secret always gets through, even while the IP is locked out —
+    // otherwise one attacker can deny service to the real admin.
+    if (body.secret && (await verifyAdminSecret(app, body.secret.trim()))) {
+      clearFailedAttempts(ip);
+      return reply.send({ success: true, secretConfigured: true });
     }
 
+    // This endpoint is exempt from the auth hook (the secret is in the body, which
+    // the hook cannot read), so it enforces its own lockout here.
+    if (checkBruteForce(ip)) {
+      return reply.code(429).send(lockoutError());
+    }
+
+    recordFailedAttempt(ip);
     return reply.code(401).send({
       error: { message: "Invalid admin password/secret", type: "authentication_error", code: "invalid_secret" },
     });
+  });
+
+  // ── Change the admin password ──
+  // Guarded by the auth hook, so the caller already holds a valid secret. The
+  // current password is still required in the body: the header comes from
+  // localStorage, and a password change should take a deliberate re-entry.
+  app.get("/api/admin/auth/password-status", async (_request, reply) => {
+    return reply.send({ customPasswordSet: await hasStoredAdminSecret(app) });
+  });
+
+  app.post("/api/admin/auth/change-password", async (request, reply) => {
+    const body = (request.body as { currentPassword?: string; newPassword?: string }) ?? {};
+    const current = body.currentPassword?.trim();
+    const next = body.newPassword?.trim();
+
+    if (!current || !next) {
+      return reply.code(400).send({
+        error: {
+          message: "currentPassword and newPassword are required",
+          type: "invalid_request_error",
+          code: "invalid_request",
+        },
+      });
+    }
+
+    if (!(await verifyAdminSecret(app, current))) {
+      recordFailedAttempt(request.ip);
+      return reply.code(401).send({
+        error: {
+          message: "Current password is incorrect",
+          type: "authentication_error",
+          code: "invalid_secret",
+        },
+      });
+    }
+
+    // Same floor the env var enforces, so a dashboard change cannot weaken it.
+    if (next.length < 8) {
+      return reply.code(400).send({
+        error: {
+          message: "New password must be at least 8 characters",
+          type: "invalid_request_error",
+          code: "invalid_request",
+        },
+      });
+    }
+
+    if (next === current) {
+      return reply.code(400).send({
+        error: {
+          message: "New password must be different from the current one",
+          type: "invalid_request_error",
+          code: "invalid_request",
+        },
+      });
+    }
+
+    const hash = hashPassword(next);
+    const now = new Date().toISOString();
+    const [existing] = await app.db
+      .select()
+      .from(settings)
+      .where(eq(settings.key, ADMIN_SECRET_SETTING_KEY))
+      .limit(1);
+
+    if (existing) {
+      await app.db
+        .update(settings)
+        .set({ value: hash, updatedAt: now })
+        .where(eq(settings.key, ADMIN_SECRET_SETTING_KEY));
+    } else {
+      await app.db
+        .insert(settings)
+        .values({ key: ADMIN_SECRET_SETTING_KEY, value: hash, updatedAt: now });
+    }
+
+    invalidateAdminSecretCache();
+    clearFailedAttempts(request.ip);
+
+    return reply.send({ success: true });
   });
 
   // ── Task 051: Models ──
@@ -251,10 +410,16 @@ export async function miscAdminRoutes(app: FastifyInstance): Promise<void> {
     const totalReq = totals?.totalRequests || 0;
     const inTok = totals?.inputTokens || 0;
     const outTok = totals?.outputTokens || 0;
-    const cachedTok = Math.round(inTok * 0.85); // estimated prompt cache savings
 
-    // Estimated standard API cost ~$0.50 / M input tokens, $1.50 / M output
-    const estCostVal = ((inTok * 0.5) / 1_000_000 + (outTok * 1.5) / 1_000_000);
+    // Cost is derived from rates the operator sets in Settings. Ollama Cloud
+    // bills by subscription and reports no per-request price, so there is
+    // nothing upstream to read — unset rates yield $0.00, not a guess.
+    const usage = await loadUsageConfig(app);
+    const costRatesConfigured =
+      usage.inputCostPerMTok > 0 || usage.outputCostPerMTok > 0;
+    const estCostVal =
+      (inTok * usage.inputCostPerMTok) / 1_000_000 +
+      (outTok * usage.outputCostPerMTok) / 1_000_000;
     const estCost = `$${estCostVal.toFixed(2)}`;
 
     // Recent requests filtered within range
@@ -350,9 +515,7 @@ export async function miscAdminRoutes(app: FastifyInstance): Promise<void> {
       lastUsed: string;
       inputTokens: number;
       outputTokens: number;
-      cachedTokens: number;
       inputCost: number;
-      cachedCost: number;
       outputCost: number;
       totalCost: number;
     }> = {};
@@ -367,9 +530,7 @@ export async function miscAdminRoutes(app: FastifyInstance): Promise<void> {
           lastUsed: r.timestamp,
           inputTokens: 0,
           outputTokens: 0,
-          cachedTokens: 0,
           inputCost: 0,
-          cachedCost: 0,
           outputCost: 0,
           totalCost: 0,
         };
@@ -377,20 +538,16 @@ export async function miscAdminRoutes(app: FastifyInstance): Promise<void> {
 
       const inT = r.inputTokens || 0;
       const outT = r.outputTokens || 0;
-      const cachedT = Math.round(inT * 0.85);
 
-      const inC = (inT * 0.5) / 1_000_000;
-      const outC = (outT * 1.5) / 1_000_000;
-      const cachedC = (cachedT * 0.3) / 1_000_000;
+      const inC = (inT * usage.inputCostPerMTok) / 1_000_000;
+      const outC = (outT * usage.outputCostPerMTok) / 1_000_000;
 
       const group = modelGroupMap[m];
       group.requests += 1;
       group.inputTokens += inT;
       group.outputTokens += outT;
-      group.cachedTokens += cachedT;
       group.inputCost += inC;
       group.outputCost += outC;
-      group.cachedCost += cachedC;
       group.totalCost += inC + outC;
       if (new Date(r.timestamp) > new Date(group.lastUsed)) {
         group.lastUsed = r.timestamp;
@@ -404,8 +561,9 @@ export async function miscAdminRoutes(app: FastifyInstance): Promise<void> {
       totalRequests: totalReq,
       inputTokens: inTok,
       outputTokens: outTok,
-      cachedTokens: cachedTok,
+      totalTokens: inTok + outTok,
       estimatedCost: estCost,
+      costRatesConfigured,
       recentRequests: recent,
       modelUsageList,
       timeline,
@@ -415,27 +573,20 @@ export async function miscAdminRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Quota Tracker: GET /api/admin/quota ──
   app.get("/api/admin/quota", async (_request, reply) => {
+    const usage = await loadUsageConfig(app);
+
     const now = Date.now();
-    const sessionWindowMs = 5 * 60 * 60 * 1000; // 5 hours rolling session window
-    const weeklyWindowMs = 7 * 24 * 60 * 60 * 1000; // 7 days rolling weekly window
+    const sessionWindowMs = usage.sessionWindowHours * 60 * 60 * 1000;
+    const weeklyWindowMs = usage.weeklyWindowDays * 24 * 60 * 60 * 1000;
 
     const sessionCutoff = new Date(now - sessionWindowMs).toISOString();
     const weeklyCutoff = new Date(now - weeklyWindowMs).toISOString();
 
-    const { gte, sql, and } = await import("drizzle-orm");
+    const { gte, sql, and, min } = await import("drizzle-orm");
 
     // Fetch all active accounts
     const accounts = await app.db.select().from(upstreamAccounts);
     const accountQuotas = [];
-
-    const freeModelsList = [
-      { id: "gemma4:31b", name: "Gemma 4 31B", sessionLimit: 1000, weeklyLimit: 5000 },
-      { id: "gpt-oss:120b", name: "GPT-OSS 120B", sessionLimit: 1000, weeklyLimit: 5000 },
-      { id: "gpt-oss:20b", name: "GPT-OSS 20B", sessionLimit: 1000, weeklyLimit: 5000 },
-      { id: "nemotron-3-nano:30b", name: "Nemotron 3 Nano", sessionLimit: 1000, weeklyLimit: 5000 },
-      { id: "nemotron-3-super", name: "Nemotron 3 Super", sessionLimit: 1000, weeklyLimit: 5000 },
-      { id: "nemotron-3-ultra", name: "Nemotron 3 Ultra", sessionLimit: 1000, weeklyLimit: 5000 },
-    ];
 
     for (const acc of accounts) {
       // 1. Session Quota (5 hours)
@@ -469,8 +620,8 @@ export async function miscAdminRoutes(app: FastifyInstance): Promise<void> {
       const sessionUsed = sessionUsage?.requests || 0;
       const weeklyUsed = weeklyUsage?.requests || 0;
 
-      const sessionLimit = 1000;
-      const weeklyLimit = 5000;
+      const sessionLimit = usage.sessionLimitRequests;
+      const weeklyLimit = usage.weeklyLimitRequests;
 
       const sessionRemaining = Math.max(0, sessionLimit - sessionUsed);
       const sessionPercent = Math.round((sessionRemaining / sessionLimit) * 100);
@@ -478,61 +629,102 @@ export async function miscAdminRoutes(app: FastifyInstance): Promise<void> {
       const weeklyRemaining = Math.max(0, weeklyLimit - weeklyUsed);
       const weeklyPercent = Math.round((weeklyRemaining / weeklyLimit) * 100);
 
-      // Breakdown per model under this account
+      // These windows roll, so capacity comes back when the oldest request in
+      // the window ages out — read it instead of printing a fixed string.
+      const [sessionOldest] = await app.db
+        .select({ ts: min(requestLogs.timestamp) })
+        .from(requestLogs)
+        .where(
+          and(
+            eq(requestLogs.finalAccountId, acc.id),
+            gte(requestLogs.timestamp, sessionCutoff),
+          ),
+        );
+      const [weeklyOldest] = await app.db
+        .select({ ts: min(requestLogs.timestamp) })
+        .from(requestLogs)
+        .where(
+          and(
+            eq(requestLogs.finalAccountId, acc.id),
+            gte(requestLogs.timestamp, weeklyCutoff),
+          ),
+        );
+
+      const sessionResetAt = sessionOldest?.ts
+        ? Date.parse(sessionOldest.ts) + sessionWindowMs
+        : null;
+      const weeklyResetAt = weeklyOldest?.ts
+        ? Date.parse(weeklyOldest.ts) + weeklyWindowMs
+        : null;
+
+      // Breakdown over the models this account actually serves, not a fixed list.
+      const accountModelRows = await app.db
+        .select({ modelId: accountModels.modelId })
+        .from(accountModels)
+        .where(
+          and(
+            eq(accountModels.accountId, acc.id),
+            eq(accountModels.available, true),
+            eq(accountModels.excluded, false),
+          ),
+        );
+
       const modelUsages = [];
-      for (const m of freeModelsList) {
+      for (const row of accountModelRows) {
         const [mSession] = await app.db
           .select({ count: sql<number>`count(*)` })
           .from(requestLogs)
           .where(
             and(
               eq(requestLogs.finalAccountId, acc.id),
-              eq(requestLogs.publicModelId, m.id),
+              eq(requestLogs.publicModelId, row.modelId),
               gte(requestLogs.timestamp, sessionCutoff),
             ),
           );
 
-        const mUsed = mSession?.count || 0;
-        const mRemaining = Math.max(0, m.sessionLimit - mUsed);
-        const mRemainingPercent = Math.round((mRemaining / m.sessionLimit) * 100);
-
         modelUsages.push({
-          modelId: m.id,
-          name: m.name,
-          used: mUsed,
-          limit: m.sessionLimit,
-          remaining: mRemaining,
-          remainingPercent: mRemainingPercent,
-          status: mRemainingPercent > 20 ? "healthy" : mRemainingPercent > 0 ? "warning" : "exhausted",
+          modelId: row.modelId,
+          name: row.modelId,
+          used: mSession?.count || 0,
         });
       }
+      modelUsages.sort((a, b) => b.used - a.used || a.modelId.localeCompare(b.modelId));
 
       accountQuotas.push({
         accountId: acc.id,
         accountName: acc.name,
-        email: acc.name.includes("@") ? acc.name : `${acc.name.toLowerCase().replace(/[^a-z0-9]/g, "")}@ollama.cloud`,
         enabled: acc.enabled,
         state: acc.state,
         tier: acc.tier || "free",
+        maxConcurrency: getAccountMaxConcurrency(acc),
         session: {
           used: sessionUsed,
           limit: sessionLimit,
           remaining: sessionRemaining,
           remainingPercent: sessionPercent,
-          resetText: "in 3h 30m",
+          resetText: formatResetIn(sessionResetAt),
         },
         weekly: {
           used: weeklyUsed,
           limit: weeklyLimit,
           remaining: weeklyRemaining,
           remainingPercent: weeklyPercent,
-          resetText: "in 5d 12h",
+          resetText: formatResetIn(weeklyResetAt),
         },
         models: modelUsages,
       });
     }
 
-    return reply.send({ accounts: accountQuotas });
+    return reply.send({
+      accounts: accountQuotas,
+      // Surfaced so the UI can say these are the operator's own limits rather
+      // than anything Ollama Cloud reported.
+      limitsSource: "local-config" as const,
+      window: {
+        sessionHours: usage.sessionWindowHours,
+        weeklyDays: usage.weeklyWindowDays,
+      },
+    });
   });
 
   // ── Task 053: Routing config ──

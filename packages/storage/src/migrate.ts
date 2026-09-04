@@ -101,6 +101,37 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS embedding_connections (
+  id TEXT PRIMARY KEY,
+  provider_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  encrypted_api_key TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  state TEXT NOT NULL DEFAULT 'ACTIVE',
+  position INTEGER NOT NULL DEFAULT 1,
+  last_success_at TEXT,
+  last_error_at TEXT,
+  last_error_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_embedding_connections_provider
+  ON embedding_connections(provider_id);
+
+CREATE TABLE IF NOT EXISTS embedding_models (
+  id TEXT PRIMARY KEY,
+  provider_id TEXT NOT NULL,
+  public_model_id TEXT NOT NULL UNIQUE,
+  upstream_model_id TEXT NOT NULL,
+  label TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_embedding_models_provider
+  ON embedding_models(provider_id);
 `;
 
 export function runMigrations(sqlite: Database.Database): void {

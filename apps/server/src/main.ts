@@ -16,7 +16,9 @@ import {
 import { adminAuthPlugin } from "./middleware/admin-auth.js";
 import { proxyKeyAuthPlugin } from "./middleware/proxy-key-auth.js";
 import { openaiRoutes, markShutdown, isShuttingDown, destroyRoutingState } from "./routes/v1.js";
+import { embeddingRoutes } from "./routes/embeddings.js";
 import { adminRoutes } from "./routes/admin/index.js";
+import { seedEmbeddingCatalog } from "./providers/embedding/bootstrap.js";
 import { startLogRetentionCleanup, startAccountHealthCheckScheduler } from "./telemetry.js";
 
 // ── Fastify type augmentation ──
@@ -63,12 +65,22 @@ if (reencryptResult.failed > 0) {
 
 await bootstrapDefaults(db);
 
+// Media Providers → Embedding: OpenRouter lists no embedding models via its API,
+// so the catalog ships as a seed the operator can then curate.
+const seededEmbeddingModels = await seedEmbeddingCatalog(db);
+if (seededEmbeddingModels > 0) {
+  console.log(`[startup] Seeded ${seededEmbeddingModels} embedding model(s) for OpenRouter`);
+}
+
 // ── Fastify ──
 const app = Fastify({
   logger: {
     level: config.logLevel,
   },
   bodyLimit: 1_048_576, // 1 MiB max request body
+  // Without this, request.ip behind a reverse proxy is the proxy's own address,
+  // so the admin brute-force lockout would key every client to a single bucket.
+  trustProxy: config.trustProxy,
 });
 
 await app.register(cors, {
@@ -97,6 +109,7 @@ await app.register(proxyKeyAuthPlugin);
 
 // ── OpenAI-compatible API routes ──
 await app.register(openaiRoutes);
+await app.register(embeddingRoutes);
 
 // ── Admin API routes ──
 await app.register(adminRoutes);

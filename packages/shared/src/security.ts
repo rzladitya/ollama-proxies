@@ -4,6 +4,7 @@ import {
   createDecipheriv,
   createHash,
   scryptSync,
+  timingSafeEqual,
 } from "node:crypto";
 
 // ── Task 013: AES-256-GCM Encryption ──
@@ -112,6 +113,38 @@ export function generateProxyKey(): GeneratedProxyKey {
 /** SHA-256 hex hash of a proxy key secret. */
 export function hashSecret(secret: string): string {
   return createHash("sha256").update(secret).digest("hex");
+}
+
+// ── Admin password hashing ──
+
+// Proxy keys are 32 random bytes, so a plain SHA-256 is fine for them. An admin
+// password is human-chosen and low-entropy, so it gets scrypt with a per-password
+// salt instead — a stolen database should not yield the password to a dictionary run.
+const PASSWORD_SCHEME = "scrypt";
+const PASSWORD_SALT_BYTES = 16;
+const PASSWORD_KEYLEN = 32;
+const PASSWORD_PARAMS = { N: 16384, r: 8, p: 1 } as const;
+
+/** Hash an admin password for storage. Format: `scrypt$<saltHex>$<hashHex>`. */
+export function hashPassword(password: string): string {
+  const salt = randomBytes(PASSWORD_SALT_BYTES);
+  const hash = scryptSync(password, salt, PASSWORD_KEYLEN, PASSWORD_PARAMS);
+  return `${PASSWORD_SCHEME}$${salt.toString("hex")}$${hash.toString("hex")}`;
+}
+
+/** Verify a password against a stored `hashPassword` value. Never throws. */
+export function verifyPassword(password: string, stored: string): boolean {
+  const parts = stored.split("$");
+  if (parts.length !== 3 || parts[0] !== PASSWORD_SCHEME) return false;
+  try {
+    const salt = Buffer.from(parts[1], "hex");
+    const expected = Buffer.from(parts[2], "hex");
+    if (expected.length === 0) return false;
+    const actual = scryptSync(password, salt, expected.length, PASSWORD_PARAMS);
+    return timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
 }
 
 // ── Task 015: Redaction ──

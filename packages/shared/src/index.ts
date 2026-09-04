@@ -4,6 +4,8 @@ export {
   decryptLegacy,
   generateProxyKey,
   hashSecret,
+  hashPassword,
+  verifyPassword,
   redact,
   redactObject,
 } from "./security.js";

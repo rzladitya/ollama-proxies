@@ -47,6 +47,14 @@ export function QuotaPage() {
         <div className="flex items-center gap-2.5">
           <Activity className="w-5 h-5 text-[#38bdf8]" />
           <h1 className="text-xl font-bold tracking-tight text-white font-mono">Quota Tracker</h1>
+          {quotaData && (
+            <span
+              className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-neutral-800 text-neutral-400 border border-neutral-700"
+              title="Ollama Cloud exposes no quota API. These limits come from your own Settings; usage is counted from this gateway's request log."
+            >
+              local limits · {quotaData.window.sessionHours}h / {quotaData.window.weeklyDays}d
+            </span>
+          )}
         </div>
 
         {/* Action Controls */}
@@ -122,7 +130,8 @@ export function QuotaPage() {
                         </span>
                       </div>
                       <div className="text-xs text-neutral-400 font-mono mt-0.5">
-                        {acc.email}
+                        {acc.tier} tier · {acc.maxConcurrency} concurrent slot
+                        {acc.maxConcurrency === 1 ? "" : "s"}
                       </div>
                     </div>
                   </div>
@@ -247,7 +256,7 @@ export function QuotaPage() {
                 {/* ── Per-Model Breakdown Accordion/Grid ── */}
                 <div className="pt-2 border-t border-[#1e2230]">
                   <div className="text-[11px] font-mono text-neutral-400 mb-2 font-semibold">
-                    Model Session Quotas ({acc.models.length} models)
+                    Requests this session window ({acc.models.length} models)
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {acc.models.map((m) => (
@@ -255,8 +264,8 @@ export function QuotaPage() {
                         <div className="truncate mr-2 text-neutral-300 font-medium" title={m.name}>
                           {m.name}
                         </div>
-                        <div className="text-emerald-400 shrink-0 font-bold">
-                          {m.remainingPercent}%
+                        <div className={`shrink-0 font-bold ${m.used > 0 ? "text-emerald-400" : "text-neutral-600"}`}>
+                          {m.used}
                         </div>
                       </div>
                     ))}

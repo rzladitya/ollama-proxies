@@ -20,6 +20,15 @@ const envSchema = z.object({
     .default("info"),
   OLLAMA_PROXY_REQUEST_TIMEOUT_SECONDS: z.coerce.number().int().default(120),
   OLLAMA_PROXY_MAX_ATTEMPTS: z.coerce.number().int().default(3),
+  // Set to true ONLY when running behind a reverse proxy you control (Nginx,
+  // Caddy, a load balancer). It makes Fastify read the client IP from
+  // X-Forwarded-For, which the brute-force lockout keys on. Leaving it false
+  // when proxied means every client shares the proxy's IP; turning it on when
+  // NOT proxied lets clients forge their own IP.
+  OLLAMA_PROXY_TRUST_PROXY: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
 });
 
 export type AppConfig = {
@@ -31,6 +40,7 @@ export type AppConfig = {
   logLevel: string;
   requestTimeoutSeconds: number;
   maxAttempts: number;
+  trustProxy: boolean;
 };
 
 export function loadConfig(): AppConfig {
@@ -44,5 +54,6 @@ export function loadConfig(): AppConfig {
     logLevel: env.OLLAMA_PROXY_LOG_LEVEL,
     requestTimeoutSeconds: env.OLLAMA_PROXY_REQUEST_TIMEOUT_SECONDS,
     maxAttempts: env.OLLAMA_PROXY_MAX_ATTEMPTS,
+    trustProxy: env.OLLAMA_PROXY_TRUST_PROXY,
   };
 }

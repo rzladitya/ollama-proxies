@@ -288,6 +288,8 @@ export async function openaiRoutes(app: FastifyInstance): Promise<void> {
       const clientAbort = new AbortController();
       request.raw.on("close", () => clientAbort.abort());
 
+      const clientWantsUsage = body.stream_options?.include_usage === true;
+
       // For streaming, we do manual attempt loop because
       // pre-output retry is allowed but post-output retry is NOT (Task 041)
       const attemptedIds = new Set<string>();
@@ -357,7 +359,13 @@ export async function openaiRoutes(app: FastifyInstance): Promise<void> {
         try {
           const apiKey = await decryptAccountKey(app, selected.id);
           const upstreamReq: ChatCompletionRequest = {
-            ...body, model: modelRow.upstreamModelId, stream: true,
+            ...body,
+            model: modelRow.upstreamModelId,
+            stream: true,
+            // Ollama Cloud omits usage from SSE chunks unless asked, which left
+            // every streamed request recorded as zero tokens. Always ask, then
+            // forward the usage chunk only if the client wanted it (below).
+            stream_options: { ...(body.stream_options ?? {}), include_usage: true },
           };
 
           const generator = ollamaClient.chatCompletionStream(apiKey, upstreamReq, {
@@ -387,6 +395,13 @@ export async function openaiRoutes(app: FastifyInstance): Promise<void> {
               trace.inputTokens = chunk.usage.prompt_tokens;
               trace.outputTokens = chunk.usage.completion_tokens;
             }
+
+            // Upstream sends a trailing usage-only chunk (empty choices) because
+            // we requested it. Pass it on only when the client asked for usage —
+            // otherwise it is telemetry we added, not part of their stream.
+            const isUsageOnly =
+              chunk.usage != null && (chunk.choices?.length ?? 0) === 0;
+            if (isUsageOnly && !clientWantsUsage) continue;
 
             chunk.model = publicModelId;
             reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);

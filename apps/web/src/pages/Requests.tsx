@@ -87,9 +87,12 @@ export function RequestsPage() {
             logsInOrder.map((r, idx) => {
               const time = new Date(r.timestamp).toTimeString().split(" ")[0];
               const isOk = (r.statusCode || 200) < 400;
-              const isTest = r.requestId?.startsWith("test_");
+              const isTest = r.requestId?.startsWith("test_") || r.requestId?.startsWith("embtest_");
               const modelName = r.publicModelId || "unknown";
-              const accName = r.finalAccountId ? r.finalAccountId.slice(0, 8) : "Ollama Acc 1";
+              // Never invent an account here. A missing id used to render as the
+              // literal "Ollama Acc 1", which attributed requests to an account
+              // that may not have served them — or may not exist at all.
+              const accName = r.finalAccountId ? r.finalAccountId.slice(0, 8) : "—";
               const modeTag = r.stream ? "STREAM" : "JSON";
 
               return (

@@ -318,11 +318,8 @@ export function useClearRequests() {
 export interface AccountQuotaModel {
   modelId: string;
   name: string;
+  /** Requests served by this account for this model inside the session window. */
   used: number;
-  limit: number;
-  remaining: number;
-  remainingPercent: number;
-  status: "healthy" | "warning" | "exhausted";
 }
 
 export interface QuotaPeriod {
@@ -336,22 +333,26 @@ export interface QuotaPeriod {
 export interface AccountQuotaItem {
   accountId: string;
   accountName: string;
-  email: string;
   enabled: boolean;
   state: "ACTIVE" | "DEGRADED" | "COOLDOWN" | "INVALID" | "DISABLED";
-  tier: "free" | "pro";
+  tier: "free" | "pro" | "max" | "team";
+  maxConcurrency: number;
   session: QuotaPeriod;
   weekly: QuotaPeriod;
   models: AccountQuotaModel[];
 }
 
+export interface QuotaResponse {
+  accounts: AccountQuotaItem[];
+  /** Limits are the operator's own config — Ollama Cloud exposes no quota API. */
+  limitsSource: "local-config";
+  window: { sessionHours: number; weeklyDays: number };
+}
+
 export function useQuotaTracker() {
   return useQuery({
     queryKey: ["quota-tracker"],
-    queryFn: () =>
-      apiFetch<{
-        accounts: AccountQuotaItem[];
-      }>("/api/admin/quota"),
+    queryFn: () => apiFetch<QuotaResponse>("/api/admin/quota"),
     refetchInterval: 10_000,
   });
 }
@@ -363,9 +364,7 @@ export interface ModelUsageGroup {
   lastUsed: string;
   inputTokens: number;
   outputTokens: number;
-  cachedTokens: number;
   inputCost: number;
-  cachedCost: number;
   outputCost: number;
   totalCost: number;
 }
@@ -374,8 +373,10 @@ export interface AnalyticsData {
   totalRequests: number;
   inputTokens: number;
   outputTokens: number;
-  cachedTokens: number;
+  totalTokens: number;
   estimatedCost: string;
+  /** False until the operator sets per-token rates in Settings. */
+  costRatesConfigured: boolean;
   isStreamingActive?: boolean;
   modelUsageList?: ModelUsageGroup[];
   recentRequests: Array<{
@@ -471,5 +472,237 @@ export function useSystemHealth() {
       }
     },
     refetchInterval: 10_000,
+  });
+}
+
+// ── Media Providers → Embedding ──
+
+export interface EmbeddingProviderCard {
+  id: string;
+  name: string;
+  tags: string[];
+  locked: boolean;
+  connectionCount: number;
+}
+
+export interface EmbeddingConnection {
+  id: string;
+  providerId: string;
+  name: string;
+  enabled: boolean;
+  state: "ACTIVE" | "INVALID" | "DISABLED";
+  position: number;
+  lastSuccessAt: string | null;
+  lastErrorAt: string | null;
+  lastErrorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EmbeddingModel {
+  id: string;
+  providerId: string;
+  publicModelId: string;
+  upstreamModelId: string;
+  label: string;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface EmbeddingProviderDetail {
+  provider: {
+    id: string;
+    name: string;
+    tags: string[];
+    locked: boolean;
+    endpoint: string;
+    apiKeyUrl: string;
+    notice: string;
+  };
+  connections: EmbeddingConnection[];
+  models: EmbeddingModel[];
+  config: { roundRobin: boolean };
+}
+
+export function useEmbeddingProviders() {
+  return useQuery({
+    queryKey: ["embedding-providers"],
+    queryFn: () =>
+      apiFetch<{ providers: EmbeddingProviderCard[] }>("/api/admin/embedding/providers"),
+  });
+}
+
+export function useEmbeddingProvider(id: string) {
+  return useQuery({
+    queryKey: ["embedding-provider", id],
+    queryFn: () => apiFetch<EmbeddingProviderDetail>(`/api/admin/embedding/providers/${id}`),
+    enabled: Boolean(id),
+  });
+}
+
+/** Invalidate both the detail page and the grid's connection counts. */
+function useEmbeddingInvalidator(providerId: string) {
+  const qc = useQueryClient();
+  return () => {
+    qc.invalidateQueries({ queryKey: ["embedding-provider", providerId] });
+    qc.invalidateQueries({ queryKey: ["embedding-providers"] });
+  };
+}
+
+export function useCreateEmbeddingConnection(providerId: string) {
+  const invalidate = useEmbeddingInvalidator(providerId);
+  return useMutation({
+    mutationFn: (data: { name: string; apiKey: string }) =>
+      apiFetch<EmbeddingConnection>("/api/admin/embedding/connections", {
+        method: "POST",
+        body: JSON.stringify({ ...data, providerId }),
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateEmbeddingConnection(providerId: string) {
+  const invalidate = useEmbeddingInvalidator(providerId);
+  return useMutation({
+    mutationFn: ({
+      id,
+      ...data
+    }: {
+      id: string;
+      name?: string;
+      apiKey?: string;
+      enabled?: boolean;
+      position?: number;
+    }) =>
+      apiFetch<EmbeddingConnection>(`/api/admin/embedding/connections/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteEmbeddingConnection(providerId: string) {
+  const invalidate = useEmbeddingInvalidator(providerId);
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<void>(`/api/admin/embedding/connections/${id}`, { method: "DELETE" }),
+    onSuccess: invalidate,
+  });
+}
+
+export interface EmbeddingTestResult {
+  success: boolean;
+  latencyMs: number;
+  model?: string;
+  dimensions?: number;
+  error?: string;
+}
+
+export function useTestEmbeddingConnection(providerId: string) {
+  return useMutation({
+    mutationFn: (data: { apiKey?: string; connectionId?: string }) =>
+      apiFetch<EmbeddingTestResult>("/api/admin/embedding/connections/test", {
+        method: "POST",
+        body: JSON.stringify({ ...data, providerId }),
+      }),
+  });
+}
+
+export function useCreateEmbeddingModel(providerId: string) {
+  const invalidate = useEmbeddingInvalidator(providerId);
+  return useMutation({
+    mutationFn: (data: { publicModelId: string; upstreamModelId?: string; label?: string }) =>
+      apiFetch<EmbeddingModel>("/api/admin/embedding/models", {
+        method: "POST",
+        body: JSON.stringify({ ...data, providerId }),
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteEmbeddingModel(providerId: string) {
+  const invalidate = useEmbeddingInvalidator(providerId);
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<void>(`/api/admin/embedding/models/${id}`, { method: "DELETE" }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateEmbeddingConfig(providerId: string) {
+  const invalidate = useEmbeddingInvalidator(providerId);
+  return useMutation({
+    mutationFn: (config: { roundRobin: boolean }) =>
+      apiFetch<{ roundRobin: boolean }>(`/api/admin/embedding/providers/${providerId}/config`, {
+        method: "PUT",
+        body: JSON.stringify(config),
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export interface EmbeddingModelTestResult {
+  success: boolean;
+  modelId: string;
+  latencyMs: number;
+  connectionName?: string;
+  attempts?: number;
+  dimensions?: number;
+  preview?: number[];
+  usage?: { prompt_tokens: number; total_tokens: number; cost?: number } | null;
+  error?: string;
+}
+
+export function useTestEmbeddingModel() {
+  return useMutation({
+    mutationFn: ({ id, input, dimensions }: { id: string; input?: string; dimensions?: number }) =>
+      apiFetch<EmbeddingModelTestResult>(`/api/admin/embedding/models/${id}/test`, {
+        method: "POST",
+        body: JSON.stringify({ input, dimensions }),
+      }),
+  });
+}
+
+export interface EmbeddingRunResult {
+  success: boolean;
+  latencyMs?: number;
+  connectionName?: string;
+  attempts?: number;
+  model?: string;
+  dimensions?: number;
+  preview?: number[];
+  usage?: { prompt_tokens: number; total_tokens: number; cost?: number } | null;
+  error?: string;
+}
+
+export function useRunEmbedding() {
+  return useMutation({
+    mutationFn: (data: { publicModelId: string; input: string; dimensions?: number }) =>
+      apiFetch<EmbeddingRunResult>("/api/admin/embedding/run", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+  });
+}
+
+// ── Admin password ──
+
+export function usePasswordStatus() {
+  return useQuery({
+    queryKey: ["password-status"],
+    queryFn: () => apiFetch<{ customPasswordSet: boolean }>("/api/admin/auth/password-status"),
+  });
+}
+
+export function useChangePassword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { currentPassword: string; newPassword: string }) =>
+      apiFetch<{ success: boolean }>("/api/admin/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["password-status"] }),
   });
 }

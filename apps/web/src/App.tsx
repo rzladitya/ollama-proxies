@@ -11,6 +11,7 @@ import { RoutingPage } from "./pages/Routing.js";
 import { SettingsPage } from "./pages/Settings.js";
 import { StatusPage } from "./pages/Status.js";
 import { LoginPage } from "./pages/Login.js";
+import { EmbeddingPage } from "./pages/media/Embedding.js";
 import { getStoredAdminSecret, setStoredAdminSecret, apiFetch } from "./api/client.js";
 
 const queryClient = new QueryClient({
@@ -74,6 +75,9 @@ export function App() {
             <Route path="routing" element={<RoutingPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="status" element={<StatusPage />} />
+            {/* System → Media Providers. Only Embedding is implemented; the other
+                submenu entries are inert in the sidebar rather than routed. */}
+            <Route path="media/embedding" element={<EmbeddingPage />} />
             {/* Alias /admin to / */}
             <Route path="admin/*" element={<Navigate to="/" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
